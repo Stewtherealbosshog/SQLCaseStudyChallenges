@@ -1,0 +1,191 @@
+---Finds the total amount of money spent per customer
+
+  SELECT Sales.customer_id,
+  SUM(menu.price)amount
+  FROM `flash-ascent-429220-r1.Dannys_Diner.diner sales` as Sales
+INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.menu` as menu
+ON Sales.product_id = menu.product_id
+GROUP BY Sales.customer_id
+ORDER BY SUM(menu.price) DESC;
+
+
+---Finds the amount of times the customer goes to the restaurant.
+SELECT 
+Sales.customer_id,
+COUNT(DISTINCT order_date)
+FROM `flash-ascent-429220-r1.Dannys_Diner.diner sales` as Sales
+GROUP BY Sales.customer_id;
+
+---Finds the first item ordered per customer
+---Using row number finds a certain row that matches what we are looking for
+---PARTITION BY Aggregates rows finding the field that matches the condition per member.
+WITH first_product AS(
+  SELECT Sales.customer_id, 
+  menu.product_name,
+  ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date) prod1
+FROM `flash-ascent-429220-r1.Dannys_Diner.diner sales` as Sales
+INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.menu` as menu
+ON Sales.product_id = menu.product_id
+GROUP BY Sales.customer_id, menu.product_name, sales.order_date
+)
+
+SELECT *
+FROM first_product
+WHERE prod1 = 1;
+
+---Finds the most purchased item and how many times did customers buy it
+SELECT menu.product_name, sales.product_id,COUNT(*) as mostp
+FROM
+  `flash-ascent-429220-r1.Dannys_Diner.diner sales` as sales
+INNER JOIN
+  `flash-ascent-429220-r1.Dannys_Diner.menu` as menu
+ON sales.product_id = menu.product_id
+GROUP BY product_name, product_id
+ORDER BY mostp DESC
+LIMIT 1;
+
+---Finds the most purchased item per customer
+---Uses an expression table to go through 2 functions
+----
+WITH popular_item AS (
+  SELECT sales.customer_id as Customer, menu.product_name as Product, COUNT(sales.product_id) as mostp,  ROW_NUMBER() OVER (PARTITION BY sales.customer_id order by COUNT(sales.product_id) DESC) rank
+
+  FROM `flash-ascent-429220-r1.Dannys_Diner.diner sales` as sales
+  INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.menu` as menu
+  ON sales.product_id = menu.product_id
+  GROUP BY Customer, Product
+  Order by Customer, Product
+)
+SELECT *
+FROM popular_item
+WHERE rank = 1;
+
+---We need to find the first item that was purchased by each member after becoming one
+WITH first_item AS (
+  SELECT sales.customer_id as Customer, menu.product_name as Product, members.join_date as JoinDate, sales.order_date as Ord, ROW_NUMBER() OVER (PARTITION BY sales.customer_id,  members.join_date ORDER BY (sales.order_date)) item_purchased
+FROM `flash-ascent-429220-r1.Dannys_Diner.diner sales` as sales
+  INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.menu` as menu
+  ON sales.product_id = menu.product_id
+  INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.members` as members
+  ON members.customer_id = sales.customer_id
+  WHERE sales.order_date >= members.join_date
+  GROUP BY Customer, Product, JoinDate, Ord
+  Order by customer
+)
+SELECT *
+FROM first_item
+WHERE item_purchased = 1;
+
+
+---We need to find the last item by each member before becoming a member
+WITH first_item AS (
+  SELECT sales.customer_id as Customer, menu.product_name as Product, members.join_date as JoinDate, sales.order_date as Ord, ROW_NUMBER() OVER (PARTITION BY sales.customer_id,  members.join_date ORDER BY (sales.order_date) DESC) item_purchased
+FROM `flash-ascent-429220-r1.Dannys_Diner.diner sales` as sales
+  INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.menu` as menu
+  ON sales.product_id = menu.product_id
+  INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.members` as members
+  ON members.customer_id = sales.customer_id
+  WHERE sales.order_date < members.join_date
+  GROUP BY Customer, Product, JoinDate, Ord
+  Order by customer
+)
+SELECT *
+FROM first_item
+WHERE item_purchased = 1;
+
+---We need to find the total amount spent and the total items by each member before becoming a member
+
+  SELECT sales.customer_id as Customer, members.join_date as JoinDate, SUM(menu.price) as total_amount, COUNT(sales.product_id) as total_count
+FROM `flash-ascent-429220-r1.Dannys_Diner.diner sales` as sales
+  INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.menu` as menu
+  ON sales.product_id = menu.product_id
+  INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.members` as members
+  ON members.customer_id = sales.customer_id
+  WHERE sales.order_date < members.join_date
+  GROUP BY Customer, JoinDate
+  Order by customer;
+
+--each $1 spent equates to 10 points and sushi has a 2x points multiplier - how many points would each customer have?
+--we have to use cases to find the condition of using the multiplier.
+-- since we have declared a temporary table with data in menu we use the declared variable as inner join.
+WITH points AS (
+Select *, Case when product_id = 1 THEN price*20
+               Else price*10
+	       End as Points
+FROM `flash-ascent-429220-r1.Dannys_Diner.menu` as menu
+)
+SELECT sales.Customer_id, SUM(p.points) as total
+FROM `flash-ascent-429220-r1.Dannys_Diner.diner sales` as sales
+  INNER JOIN points as p
+  ON sales.product_id = p.product_id
+  GROUP BY Customer_id;
+
+
+---In the first week after a customer joins the program (including their join date) they earn 2x points on all items, not just sushi - how many points do customer A and B have at the end of January?
+Select 
+sales.customer_id as customer, 
+SUM(Case 
+      when sales.order_date BETWEEN members.join_date AND members.join_date + INTERVAL 6 DAY THEN price * 20
+      when sales.product_id = 1 THEN price * 20 
+      Else price*10
+END) AS points
+
+FROM `flash-ascent-429220-r1.Dannys_Diner.diner sales` as sales
+  INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.menu` as menu
+  ON sales.product_id = menu.product_id
+  INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.members` as members
+  ON members.customer_id = sales.customer_id
+  WHERE EXTRACT(MONTH FROM sales.order_date) = 1 
+  GROUP BY customer
+  ORDER BY points desc;
+
+
+---Make a bonus table with the membership status and price
+---LEFT JOIN is needed to reach the member C orders
+
+SELECT 
+sales.customer_id, 
+sales.order_date as OD,
+menu.product_name as PN, 
+menu.price as p, 
+CASE
+WHEN sales.order_date >= members.join_date THEN 'Y'
+      Else 'N'
+END AS member
+
+FROM `flash-ascent-429220-r1.Dannys_Diner.diner sales` as sales
+  INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.menu` as menu
+  ON sales.product_id = menu.product_id
+  LEFT JOIN `flash-ascent-429220-r1.Dannys_Diner.members` as members
+  ON members.customer_id = sales.customer_id
+  ORDER BY customer_id, OD, PN desc;
+
+
+---Make a bonus table with the membership status and ranking
+---RANK() is needed to find the rank
+
+WITH r AS (
+  SELECT sales.customer_id, 
+sales.order_date as OD,
+menu.product_name as PN, 
+menu.price as p, 
+CASE
+WHEN sales.order_date >= members.join_date THEN 'Y'
+      Else 'N'
+END AS member,
+FROM `flash-ascent-429220-r1.Dannys_Diner.diner sales` as sales
+  INNER JOIN `flash-ascent-429220-r1.Dannys_Diner.menu` as menu
+  ON sales.product_id = menu.product_id
+  LEFT JOIN `flash-ascent-429220-r1.Dannys_Diner.members` as members
+  ON members.customer_id = sales.customer_id
+  ORDER BY customer_id, OD, PN asc
+)
+SELECT
+*,
+CASE 
+WHEN member = 'Y' THEN RANK() OVER(
+PARTITION BY customer_id, member
+            ORDER BY OD) 
+        ELSE null 
+    END AS ranking
+FROM r;
